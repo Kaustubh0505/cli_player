@@ -22,6 +22,9 @@ let playingIndex = -1;
 let isPaused = false;
 let vlcProcess = null;
 
+let isShuffle = false;
+let repeatMode = 'OFF'; // 'OFF' | 'ONE' | 'ALL'
+
 let renderInterval = null;
 let syncInterval = null;
 let totalDuration = 0;
@@ -38,6 +41,15 @@ function getAudioDuration(filePath) {
     }
   } catch (_) {}
   return 0;
+}
+
+function getRandomSongIndex(currentIndex) {
+  if (songs.length <= 1) return 0;
+  let nextIdx;
+  do {
+    nextIdx = Math.floor(Math.random() * songs.length);
+  } while (nextIdx === currentIndex && songs.length > 1);
+  return nextIdx;
 }
 
 function getCurrentTime() {
@@ -68,7 +80,8 @@ function renderProgressBar(current, total, width = 20) {
 function render() {
   process.stdout.write('\x1B[H\x1B[J\x1B[?25l');
   console.log('🎵 Node CLI Music Player');
-  console.log('========================\n');
+  console.log('========================');
+  console.log(`[🔀 Shuffle: ${isShuffle ? 'ON' : 'OFF'}]  [🔁 Repeat: ${repeatMode}]\n`);
 
   songs.forEach((song, i) => {
     const isSelected = i === selectedIndex;
@@ -88,19 +101,45 @@ function render() {
     console.log('========================');
   }
 
-  console.log('Controls: [↑/↓] Navigate | [←/→] Seek ±10s | [N/P] Next/Prev | [Space] Pause | [Enter] Play | [Q] Quit');
+  console.log('Controls: [↑/↓] Nav | [←/→] Seek ±10s | [N/P] Next/Prev | [S] Shuffle | [R] Repeat | [Space] Pause | [Enter] Play | [Q] Quit');
+}
+
+function toggleShuffle() {
+  isShuffle = !isShuffle;
+  render();
+}
+
+function cycleRepeat() {
+  if (repeatMode === 'OFF') {
+    repeatMode = 'ONE';
+  } else if (repeatMode === 'ONE') {
+    repeatMode = 'ALL';
+  } else {
+    repeatMode = 'OFF';
+  }
+  render();
 }
 
 function nextSong() {
   const baseIndex = playingIndex !== -1 ? playingIndex : selectedIndex;
-  const newIndex = (baseIndex + 1) % songs.length;
+  let newIndex;
+  if (isShuffle) {
+    newIndex = getRandomSongIndex(baseIndex);
+  } else {
+    newIndex = (baseIndex + 1) % songs.length;
+  }
   selectedIndex = newIndex;
   playSong(newIndex);
 }
 
 function prevSong() {
   const baseIndex = playingIndex !== -1 ? playingIndex : selectedIndex;
-  const newIndex = (baseIndex - 1 + songs.length) % songs.length;
+  let newIndex;
+  if (isShuffle) {
+    newIndex = getRandomSongIndex(baseIndex);
+  } else {
+    newIndex = (baseIndex - 1 + songs.length) % songs.length;
+  }
   selectedIndex = newIndex;
   playSong(newIndex);
 }
@@ -185,8 +224,21 @@ function playSong(index) {
 
   proc.on('exit', () => {
     if (vlcProcess === proc) {
+      const lastIndex = playingIndex;
       stopSong();
-      render();
+
+      if (repeatMode === 'ONE') {
+        playSong(lastIndex);
+      } else if (isShuffle) {
+        const nextIdx = getRandomSongIndex(lastIndex);
+        playSong(nextIdx);
+      } else if (lastIndex !== -1 && lastIndex < songs.length - 1) {
+        playSong(lastIndex + 1);
+      } else if (repeatMode === 'ALL') {
+        playSong(0);
+      } else {
+        render();
+      }
     }
   });
 
@@ -261,6 +313,10 @@ process.stdin.on('keypress', (_, key) => {
     nextSong();
   } else if (key.name === 'p') {
     prevSong();
+  } else if (key.name === 's') {
+    toggleShuffle();
+  } else if (key.name === 'r') {
+    cycleRepeat();
   } else if (key.name === 'space' || key.sequence === ' ') {
     togglePause();
     render();
