@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const readline = require('readline');
 
 const songsDir = path.join(__dirname, 'songs');
@@ -22,8 +22,51 @@ let playingIndex = -1;
 let isPaused = false;
 let vlcProcess = null;
 
+let renderInterval = null;
+let syncInterval = null;
+let totalDuration = 0;
+let playbackOffset = 0;
+let playbackStartTime = 0;
+let hasSynced = false;
+
+function getAudioDuration(filePath) {
+  try {
+    const out = execSync(`afinfo "${filePath}"`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    const match = out.match(/estimated duration:\s*([\d\.]+)/i);
+    if (match) {
+      return Math.round(parseFloat(match[1]));
+    }
+  } catch (_) {}
+  return 0;
+}
+
+function getCurrentTime() {
+  if (playingIndex === -1) return 0;
+  if (isPaused) return playbackOffset;
+  if (!hasSynced) return playbackOffset;
+  const elapsed = (Date.now() - playbackStartTime) / 1000;
+  const current = playbackOffset + elapsed;
+  return totalDuration > 0 ? Math.min(current, totalDuration) : Math.max(0, current);
+}
+
+function formatTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m.toString().padStart(2, '0')}:${r.toString().padStart(2, '0')}`;
+}
+
+function renderProgressBar(current, total, width = 20) {
+  const percent = total > 0 ? Math.min(1, Math.max(0, current / total)) : 0;
+  const filled = Math.round(percent * width);
+  const empty = width - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const icon = isPaused ? '⏸' : '▶';
+  return `${icon} ${bar} ${formatTime(current)} / ${formatTime(total)}`;
+}
+
 function render() {
-  console.clear();
+  process.stdout.write('\x1B[H\x1B[J\x1B[?25l');
   console.log('🎵 Node CLI Music Player');
   console.log('========================\n');
 
@@ -36,10 +79,27 @@ function render() {
   });
 
   console.log('\n========================');
+
+  if (playingIndex !== -1) {
+    const songName = songs[playingIndex];
+    const curTime = getCurrentTime();
+    console.log(`Now Playing: ${songName}`);
+    console.log(renderProgressBar(curTime, totalDuration, 20));
+    console.log('========================');
+  }
+
   console.log('Controls: [↑/↓] Navigate | [Enter] Play | [P] Pause/Resume | [Q] Quit');
 }
 
 function stopSong() {
+  if (renderInterval) {
+    clearInterval(renderInterval);
+    renderInterval = null;
+  }
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
   if (vlcProcess) {
     vlcProcess.removeAllListeners('exit');
     try {
@@ -47,16 +107,44 @@ function stopSong() {
     } catch (_) {}
     vlcProcess = null;
   }
+  playingIndex = -1;
+  isPaused = false;
+  totalDuration = 0;
+  playbackOffset = 0;
+  playbackStartTime = 0;
+  hasSynced = false;
 }
 
 function playSong(index) {
   stopSong();
   playingIndex = index;
   isPaused = false;
+  hasSynced = false;
+
   const songPath = path.join(songsDir, songs[index]);
+  totalDuration = getAudioDuration(songPath);
+  playbackOffset = 0;
+  playbackStartTime = Date.now();
 
   const proc = spawn('vlc', ['-I', 'rc', '--no-video', '--play-and-exit', songPath], {
     stdio: ['pipe', 'pipe', 'ignore']
+  });
+
+  proc.stdout.on('data', (data) => {
+    const lines = data.toString().split(/[\r\n]+/);
+    for (const line of lines) {
+      const trimmed = line.replace('>', '').trim();
+      if (/^\d+$/.test(trimmed)) {
+        const val = parseInt(trimmed, 10);
+        if (totalDuration === 0 && val > 30) {
+          totalDuration = val;
+        } else if (!isPaused) {
+          playbackOffset = val;
+          playbackStartTime = Date.now();
+          hasSynced = true;
+        }
+      }
+    }
   });
 
   proc.on('error', (err) => {
@@ -65,25 +153,51 @@ function playSong(index) {
 
   proc.on('exit', () => {
     if (vlcProcess === proc) {
-      vlcProcess = null;
-      playingIndex = -1;
-      isPaused = false;
+      stopSong();
       render();
     }
   });
 
   vlcProcess = proc;
+
+  // Request total duration fallback and initial time sync
+  setTimeout(() => {
+    if (vlcProcess === proc) {
+      vlcProcess.stdin.write('get_length\nget_time\n');
+    }
+  }, 300);
+
+  // Periodically query VLC time to prevent drift
+  syncInterval = setInterval(() => {
+    if (vlcProcess && !isPaused) {
+      vlcProcess.stdin.write('get_time\n');
+    }
+  }, 1000);
+
+  // Smooth UI animation timer (100ms interval = 10 FPS)
+  renderInterval = setInterval(() => {
+    render();
+  }, 100);
 }
 
 function togglePause() {
   if (vlcProcess && playingIndex !== -1) {
-    isPaused = !isPaused;
+    if (!isPaused) {
+      // Pausing
+      playbackOffset = getCurrentTime();
+      isPaused = true;
+    } else {
+      // Resuming
+      isPaused = false;
+      playbackStartTime = Date.now();
+    }
     vlcProcess.stdin.write('pause\n');
   }
 }
 
 function cleanup() {
   stopSong();
+  process.stdout.write('\x1B[?25h');
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(false);
   }
@@ -117,6 +231,10 @@ process.stdin.on('keypress', (_, key) => {
 });
 
 process.on('SIGINT', cleanup);
-process.on('exit', stopSong);
+process.on('exit', () => {
+  process.stdout.write('\x1B[?25h');
+  stopSong();
+});
 
 render();
+
