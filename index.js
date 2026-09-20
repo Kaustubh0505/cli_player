@@ -88,7 +88,21 @@ function render() {
     console.log('========================');
   }
 
-  console.log('Controls: [↑/↓] Navigate | [←/→] Seek ±10s | [Enter] Play | [P] Pause/Resume | [Q] Quit');
+  console.log('Controls: [↑/↓] Navigate | [←/→] Seek ±10s | [N/P] Next/Prev | [Space] Pause | [Enter] Play | [Q] Quit');
+}
+
+function nextSong() {
+  const baseIndex = playingIndex !== -1 ? playingIndex : selectedIndex;
+  const newIndex = (baseIndex + 1) % songs.length;
+  selectedIndex = newIndex;
+  playSong(newIndex);
+}
+
+function prevSong() {
+  const baseIndex = playingIndex !== -1 ? playingIndex : selectedIndex;
+  const newIndex = (baseIndex - 1 + songs.length) % songs.length;
+  selectedIndex = newIndex;
+  playSong(newIndex);
 }
 
 function seekSong(seconds) {
@@ -243,11 +257,15 @@ process.stdin.on('keypress', (_, key) => {
     seekSong(-10);
   } else if (key.name === 'right') {
     seekSong(10);
+  } else if (key.name === 'n') {
+    nextSong();
+  } else if (key.name === 'p') {
+    prevSong();
+  } else if (key.name === 'space' || key.sequence === ' ') {
+    togglePause();
+    render();
   } else if (key.name === 'return') {
     playSong(selectedIndex);
-    render();
-  } else if (key.name === 'p') {
-    togglePause();
     render();
   }
 });
