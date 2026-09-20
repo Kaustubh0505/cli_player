@@ -88,7 +88,25 @@ function render() {
     console.log('========================');
   }
 
-  console.log('Controls: [↑/↓] Navigate | [Enter] Play | [P] Pause/Resume | [Q] Quit');
+  console.log('Controls: [↑/↓] Navigate | [←/→] Seek ±10s | [Enter] Play | [P] Pause/Resume | [Q] Quit');
+}
+
+function seekSong(seconds) {
+  if (vlcProcess && playingIndex !== -1) {
+    const cur = getCurrentTime();
+    let target = cur + seconds;
+    if (totalDuration > 0) {
+      target = Math.min(totalDuration, target);
+    }
+    target = Math.max(0, target);
+
+    playbackOffset = target;
+    playbackStartTime = Date.now();
+    hasSynced = true;
+
+    vlcProcess.stdin.write(`seek ${Math.round(target)}\n`);
+    render();
+  }
 }
 
 function stopSong() {
@@ -221,6 +239,10 @@ process.stdin.on('keypress', (_, key) => {
   } else if (key.name === 'down') {
     selectedIndex = (selectedIndex + 1) % songs.length;
     render();
+  } else if (key.name === 'left') {
+    seekSong(-10);
+  } else if (key.name === 'right') {
+    seekSong(10);
   } else if (key.name === 'return') {
     playSong(selectedIndex);
     render();
